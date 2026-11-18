@@ -1,16 +1,49 @@
 const {app,BrowserWindow,ipcMain,Menu,screen}=require('electron');
-const SCALE=0.5, W=Math.round(960*SCALE), H=Math.round(900*SCALE); // 크기를 바꾸려면 pet.html의 --s 도 같이 수정
-let win,startPos;
+const fs=require('fs'),path=require('path');
+const BASE_W=960, BASE_H=900;                       // 캐릭터 원본 화면 크기(배율 1.0 기준)
+let win,startPos,cfgPath,saveTimer;
+let cfg={scale:0.5,locked:false,x:null,y:null};      // 저장되는 설정
 if(!app.requestSingleInstanceLock()){app.quit()}
+// 다른 창이 위를 덮거나 전체화면이어도 그리기/애니메이션이 멈추지 않도록
+app.commandLine.appendSwitch('disable-features','CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+
+function loadCfg(){try{cfg={...cfg,...JSON.parse(fs.readFileSync(cfgPath,'utf8'))}}catch(e){}}
+function saveCfg(){try{fs.writeFileSync(cfgPath,JSON.stringify(cfg))}catch(e){}}
+function saveSoon(){clearTimeout(saveTimer);saveTimer=setTimeout(saveCfg,300)}
+function onScreen(x,y,w,h){
+  return screen.getAllDisplays().some(d=>{const a=d.workArea;
+    return x+w>a.x+40&&x<a.x+a.width-40&&y+h>a.y+40&&y<a.y+a.height-40});
+}
+function applyScale(s,keepAnchor=true){
+  cfg.scale=s;
+  const w=Math.round(BASE_W*s),h=Math.round(BASE_H*s),b=win.getBounds();
+  // 바닥 중앙을 기준으로 크기를 바꿔서 캐릭터가 제자리에 있는 것처럼 보이게 함
+  const nx=keepAnchor?Math.round(b.x+(b.width-w)/2):b.x, ny=keepAnchor?b.y+b.height-h:b.y;
+  win.setResizable(true);win.setBounds({x:nx,y:ny,width:w,height:h});win.setResizable(false);
+  win.webContents.send('set-scale',s);
+  saveSoon();
+}
+
 app.whenReady().then(()=>{
+  cfgPath=path.join(app.getPath('userData'),'settings.json');loadCfg();
+  const W=Math.round(BASE_W*cfg.scale),H=Math.round(BASE_H*cfg.scale);
   const wa=screen.getPrimaryDisplay().workArea;
-  win=new BrowserWindow({width:W,height:H,x:wa.x+wa.width-W-40,y:wa.y+wa.height-H,
+  let x=wa.x+wa.width-W-40,y=wa.y+wa.height-H;
+  if(cfg.x!=null&&cfg.y!=null&&onScreen(cfg.x,cfg.y,W,H)){x=cfg.x;y=cfg.y}
+  win=new BrowserWindow({width:W,height:H,x,y,
     frame:false,transparent:true,hasShadow:false,resizable:false,maximizable:false,fullscreenable:false,
     alwaysOnTop:true,skipTaskbar:true,backgroundColor:'#00000000',
-    webPreferences:{nodeIntegration:true,contextIsolation:false,webSecurity:false}});
+    focusable:false,
+    webPreferences:{nodeIntegration:true,contextIsolation:false,webSecurity:false,backgroundThrottling:false}});
   win.setAlwaysOnTop(true,'screen-saver');
   win.setIgnoreMouseEvents(true,{forward:true});      // 투명한 곳은 클릭 통과
   win.loadFile('pet.html');
+  // 전체화면 앱이 켜져도 펫이 계속 맨 위에 보이도록 주기적으로 다시 올림
+  setInterval(()=>{if(win&&!win.isDestroyed()){win.setAlwaysOnTop(true,'screen-saver');win.moveTop()}},2000);
+  win.webContents.on('did-finish-load',()=>win.webContents.send('set-scale',cfg.scale));
+  win.on('move',()=>{const b=win.getBounds();cfg.x=b.x;cfg.y=b.y;saveSoon()});
   // 다른 프로그램에서 키보드를 쳐도 반응하도록 전역 키 입력 감지
   try{
     const {uIOhook}=require('uiohook-napi');
@@ -19,10 +52,17 @@ app.whenReady().then(()=>{
   }catch(err){console.error('전역 키 감지 실패(창이 포커스일 때만 반응):',err.message)}
 });
 ipcMain.on('ignore',(e,v)=>{if(win)win.setIgnoreMouseEvents(v,{forward:true})});
-ipcMain.on('drag-start',()=>{startPos=win.getPosition()});
-ipcMain.on('drag-move',(e,dx,dy)=>{if(startPos)win.setPosition(startPos[0]+dx,startPos[1]+dy)});
+ipcMain.on('drag-start',()=>{startPos=cfg.locked?null:win.getPosition()});   // 위치 고정이면 이동 안 함
+ipcMain.on('drag-move',(e,dx,dy)=>{if(startPos&&!cfg.locked)win.setPosition(startPos[0]+dx,startPos[1]+dy)});
 ipcMain.on('menu',()=>{
-  Menu.buildFromTemplate([{label:'종료',click:()=>app.quit()}]).popup({window:win});
+  const pct=Math.round(cfg.scale*100);
+  Menu.buildFromTemplate([
+    {label:'크기',submenu:[30,40,50,60,75,100].map(p=>({
+      label:p+'%'+(p===50?' (기본)':''),type:'radio',checked:pct===p,click:()=>applyScale(p/100)}))},
+    {label:'위치 고정',type:'checkbox',checked:cfg.locked,click:m=>{cfg.locked=m.checked;saveCfg()}},
+    {type:'separator'},
+    {label:'종료',click:()=>app.quit()}
+  ]).popup({window:win});
 });
-app.on('will-quit',()=>{try{require('uiohook-napi').uIOhook.stop()}catch(e){}});
+app.on('will-quit',()=>{saveCfg();try{require('uiohook-napi').uIOhook.stop()}catch(e){}});
 app.on('window-all-closed',()=>app.quit());
