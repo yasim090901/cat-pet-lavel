@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><title>Desktop Pet</title>
+<style>
+:root{--s:0.5}
+html,body{margin:0;height:100%;overflow:hidden;background:transparent;user-select:none}
+body.browser{background:#e9e4f2}
+#stage{position:absolute;left:0;top:0;width:960px;height:900px;transform:scale(var(--s));transform-origin:0 0}
+#stage img{position:absolute;pointer-events:none;-webkit-user-drag:none}
+#hint{position:fixed;left:8px;top:6px;font:12px sans-serif;color:#7a6a99;display:none}
+body.browser #hint{display:block}
+</style></head><body>
+<div id="stage">
+  <img id="tail" src="assets/tail.png" width="220">
+  <img id="body" src="assets/body.png">
+  <img id="patch_l" src="assets/patch_l.png" style="display:none">
+  <img id="patch_r" src="assets/patch_r.png" style="display:none">
+  <img id="eye_l" src="assets/eye_closed_l.png" width="130" style="display:none">
+  <img id="eye_r" src="assets/eye_closed_r.png" width="133" style="display:none">
+  <img id="kbd" src="assets/keyboard.png" width="850">
+  <img id="arm_l" src="assets/arm_l.png">
+  <img id="arm_r" src="assets/arm_r.png">
+</div>
+<div id="hint">아무 키나 누르면 팔이 건반을 쳐요</div>
+<script>
+const OX=80, OY=20;                 // 몸통 이미지의 스테이지 내 위치
+const $=id=>document.getElementById(id);
+const place=(el,x,y,ox=0,oy=0,rot=0)=>{ // (x,y)=몸통 좌표, ox/oy=이미지 내 기준점
+  el.style.left=(OX+x-ox)+'px'; el.style.top=(OY+y-oy)+'px';
+  el.style.transformOrigin=ox+'px '+oy+'px'; el.style.transform=`rotate(${rot}deg)`;
+};
+$('body').style.left=(OX+16)+'px'; $('body').style.top=(OY+9)+'px';  // 새 도안 몸통 크롭 보정
+
+/* ---- 눈 ---- */
+const EYES=[ // p: 보정 패치 좌상단, (cx,cy): 감은 눈 위치(속눈썹선 중심), cen: 이미지 속 먹선 중심
+ {p:'patch_l',e:'eye_l',px:145,py:350,cx:235,cy:408,cen:[67,38],rot:-2.5,sx:0.81,sy:0.75},
+ {p:'patch_r',e:'eye_r',px:297,py:296,cx:402,cy:361,cen:[65,20],rot:-21.4,sx:0.87,sy:0.75}];
+for(const k of EYES){
+  place($(k.p),k.px,k.py);
+  const el=$(k.e);el.style.left=(OX+k.cx-k.cen[0])+'px';el.style.top=(OY+k.cy-k.cen[1])+'px';
+  el.style.transformOrigin=k.cen[0]+'px '+k.cen[1]+'px';
+  el.style.transform=`rotate(${k.rot}deg) scale(${k.sx},${k.sy})`;
+}
+function setBlink(on){for(const k of EYES){$(k.p).style.display=$(k.e).style.display=on?'block':'none'}}
+function blinkLoop(){
+  setTimeout(()=>{
+    setBlink(true);
+    setTimeout(()=>{setBlink(false);
+      if(Math.random()<0.25) setTimeout(()=>{setBlink(true);setTimeout(()=>setBlink(false),120)},170); // 가끔 두 번 깜빡
+      blinkLoop();
+    },140);
+  },2500+Math.random()*3000);
+}
+blinkLoop();
+
+/* ---- 꼬리: 일정한 주기로 좌우 흔들기 ---- */
+const TAIL={bx:625,by:775,ox:84,oy:273,base:40,amp:9,period:1.8}; // 기준점은 꼬리 이미지의 뿌리 부분
+$('tail').onload=null;
+
+/* ---- 건반 ---- */
+place($('kbd'),-75,745);
+
+/* ---- 팔: 어깨를 축으로 각도만 변경 ---- */
+const ARM={
+  l:{el:$('arm_l'),sx:274,sy:562,ox:82,oy:14,idle:60,press:[0,8]},    // 대기: 8시 방향으로 들어올림 → 누름: 내려가서 건반
+  r:{el:$('arm_r'),sx:507,sy:572,ox:76,oy:14,idle:60,press:[0,8]}      // 왼팔과 완전히 같은 각도/방향
+};
+for(const k in ARM){const a=ARM[k];a.angle=a.idle;a.from=a.idle;a.target=a.idle;a.dd=60;a.t0=-1e9}
+const ease=u=>u*u*(3-2*u);
+function armAngle(a,now){
+  const dt=now-a.t0;
+  if(dt<a.dd){const u=dt/a.dd;return a.from+(a.target-a.from)*u*u}          // 내려치기(가속)
+  if(dt<a.dd+30)return a.target;                                              // 건반에 닿은 상태
+  const u=Math.min(1,(dt-a.dd-30)/170);return a.target+(a.idle-a.target)*ease(u) // 다시 들어올림
+}
+function press(k){
+  const a=ARM[k]; a.from=a.angle; a.t0=performance.now();
+  a.target=a.press[0]+Math.random()*(a.press[1]-a.press[0]);
+  a.dd=Math.max(22,45*Math.abs(a.from-a.target)/60);
+}
+let last='r';
+function keyPress(){          // 키 입력 1회 = 팔 1회 (대체로 번갈아, 가끔 같은 손)
+  last=Math.random()<0.75?(last==='l'?'r':'l'):last;
+  press(last);
+}
+
+/* ---- 매 프레임 ---- */
+function frame(now){
+  const t=now/1000;
+  place($('tail'),TAIL.bx,TAIL.by,TAIL.ox,TAIL.oy,TAIL.base+TAIL.amp*Math.sin(2*Math.PI*t/TAIL.period));
+  for(const k in ARM){
+    const a=ARM[k];
+    a.angle=armAngle(a,now);
+    place(a.el,a.sx,a.sy,a.ox,a.oy,a.angle);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---- 입력: 키 입력=건반 치기, 캐릭터를 좌클릭 꾹 누르고 끌면 이동, 우클릭=메뉴 ---- */
+const isElectron=typeof require==='function';
+let ipc=null;if(isElectron){ipc=require('electron').ipcRenderer}else{document.body.classList.add('browser')}
+
+// 투명한 부분은 클릭이 뒤쪽 창으로 통과하고, 캐릭터(불투명 픽셀) 위에서만 잡히도록 판정
+const alphaCache=new Map();
+function alphaAt(img,nx,ny){
+  let g=alphaCache.get(img);
+  if(!g){const cv=document.createElement('canvas');cv.width=img.naturalWidth;cv.height=img.naturalHeight;
+    g=cv.getContext('2d',{willReadFrequently:true});g.drawImage(img,0,0);alphaCache.set(img,g)}
+  try{return g.getImageData(Math.max(0,Math.min(img.naturalWidth-1,nx|0)),Math.max(0,Math.min(img.naturalHeight-1,ny|0)),1,1).data[3]}catch(e){return 255}
+}
+function hitEl(el,x,y){                       // x,y: 스테이지 좌표
+  if(el.style.display==='none')return false;
+  const cs=getComputedStyle(el);
+  const m=new DOMMatrix(cs.transform==='none'?'':cs.transform);
+  const [ox,oy]=cs.transformOrigin.split(' ').map(parseFloat);
+  const p=m.inverse().transformPoint(new DOMPoint(x-parseFloat(el.style.left)-ox,y-parseFloat(el.style.top)-oy));
+  const lx=p.x+ox,ly=p.y+oy;
+  if(lx<0||ly<0||lx>=el.offsetWidth||ly>=el.offsetHeight)return false;
+  return alphaAt(el,lx*el.naturalWidth/el.offsetWidth,ly*el.naturalHeight/el.offsetHeight)>40;
+}
+const HIT_ORDER=['kbd','arm_l','arm_r','body','tail'].map($);
+function hitTest(cx,cy){
+  const r=$('stage').getBoundingClientRect(),s=r.width/960;
+  const x=(cx-r.left)/s,y=(cy-r.top)/s;
+  return HIT_ORDER.some(el=>hitEl(el,x,y));
+}
+let ignoring=true,dragging=false,start=null;
+if(ipc)ipc.send('ignore',true);
+window.addEventListener('mousemove',e=>{
+  if(dragging){ipc.send('drag-move',e.screenX-start.x,e.screenY-start.y);return}
+  if(!ipc)return;
+  const hit=hitTest(e.clientX,e.clientY);
+  if(hit&&ignoring){ipc.send('ignore',false);ignoring=false}
+  else if(!hit&&!ignoring){ipc.send('ignore',true);ignoring=true}
+});
+window.addEventListener('mousedown',e=>{
+  if(e.button!==0||!ipc||ignoring)return;
+  dragging=true;start={x:e.screenX,y:e.screenY};ipc.send('drag-start');document.body.style.cursor='grabbing';
+});
+window.addEventListener('mouseup',()=>{if(dragging){dragging=false;document.body.style.cursor=''}});
+window.addEventListener('contextmenu',e=>{e.preventDefault();ipc&&!ignoring&&ipc.send('menu')});
+window.addEventListener('keydown',e=>{if(!e.repeat)keyPress()});   // 브라우저 미리보기용
+if(ipc)ipc.on('key',keyPress);                                       // 데스크톱: 전역 키 입력
+</script></body></html>
