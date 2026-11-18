@@ -22,7 +22,7 @@ function applyScale(s,keepAnchor=true){
   // 바닥 중앙을 기준으로 크기를 바꿔서 캐릭터가 제자리에 있는 것처럼 보이게 함
   const nx=keepAnchor?Math.round(b.x+(b.width-w)/2):b.x, ny=keepAnchor?b.y+b.height-h:b.y;
   win.setResizable(true);win.setBounds({x:nx,y:ny,width:w,height:h});win.setResizable(false);
-  win.webContents.send('set-scale',s);
+  win.webContents.setZoomFactor(s/0.5);   // pet.html 기본 배율(0.5) 대비 창 전체를 확대/축소
   saveSoon();
 }
 
@@ -42,12 +42,19 @@ app.whenReady().then(()=>{
   win.loadFile('pet.html');
   // 전체화면 앱이 켜져도 펫이 계속 맨 위에 보이도록 주기적으로 다시 올림
   setInterval(()=>{if(win&&!win.isDestroyed()){win.setAlwaysOnTop(true,'screen-saver');win.moveTop()}},2000);
-  win.webContents.on('did-finish-load',()=>win.webContents.send('set-scale',cfg.scale));
+  win.webContents.on('did-finish-load',()=>win.webContents.setZoomFactor(cfg.scale/0.5));
+  win.webContents.on('dom-ready',()=>win.webContents.setZoomFactor(cfg.scale/0.5));
   win.on('move',()=>{const b=win.getBounds();cfg.x=b.x;cfg.y=b.y;saveSoon()});
   // 다른 프로그램에서 키보드를 쳐도 반응하도록 전역 키 입력 감지
   try{
     const {uIOhook}=require('uiohook-napi');
-    uIOhook.on('keydown',()=>{if(win&&!win.isDestroyed())win.webContents.send('key')});
+    let lastTop=0;
+    uIOhook.on('keydown',()=>{
+      if(!win||win.isDestroyed())return;
+      const t=Date.now();
+      if(t-lastTop>1000){lastTop=t;if(!win.isVisible())win.showInactive();win.setAlwaysOnTop(true,'screen-saver');win.moveTop()}
+      win.webContents.send('key');
+    });
     uIOhook.start();
   }catch(err){console.error('전역 키 감지 실패(창이 포커스일 때만 반응):',err.message)}
 });
